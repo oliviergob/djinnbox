@@ -1,0 +1,25 @@
+{
+    "name": "Secure Container",
+    "image": "docker.io/oliviergob/dev-image:latest",
+    "workspaceFolder": "/home/devuser/workspace",
+    "remoteUser": "devuser",
+    "runArgs": ["--userns=keep-id"],
+    "mounts": ["source=${localWorkspaceFolder},target=/home/devuser/workspace,type=bind,Z",
+                "source=${localEnv:HOME}/.ssh,target=/home/devuser/.ssh,type=bind",
+                "source=devcontainer-vscode-extensions,target=/home/devuser/.vscode-server/extensions,type=volume",
+                "source=devcontainer-vscode-data,target=/home/devuser/.vscode-server/data,type=volume",
+                "source=devcontainer-claude,target=/home/devuser/.claude,type=volume"
+],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "anthropic.claude-code"
+            ],
+            "settings": {
+                "chat.commandCenter.enabled": false,
+                "inlineChat.enabled": false,
+                "chat.editor.enabled": false
+            }
+        }
+    }
+}

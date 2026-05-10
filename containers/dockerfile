@@ -1,0 +1,42 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+  #  locales \
+    openssh-client \
+    python3 \
+    python3-pip \
+    python3-venv \
+    vim \
+ #   && locale-gen en_US.UTF-8 \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+#ENV LANG=en_US.UTF-8 \
+#    LANGUAGE=en_US:en \
+#    LC_ALL=en_US.UTF-8 \
+#    GIT_CONFIG_GLOBAL=/home/devuser/.config/git/config
+
+RUN npm install -g sfw
+
+RUN useradd -m -s /bin/bash devuser
+
+# Pre-create directories VSCode needs and ensure devuser owns everything
+RUN mkdir -p /home/devuser/.vscode-server/bin \
+             /home/devuser/.claude \
+             /home/devuser/workspace && \
+    chown -R devuser:devuser /home/devuser
+
+USER devuser
+WORKDIR /home/devuser/workspace
+
+RUN echo "alias npm='sfw npm'" >> ~/.bashrc \
+    && echo "alias pip='sfw pip'" >> ~/.bashrc \
+    && echo "alias pip3='sfw pip'" >> ~/.bashrc
+
+RUN node --version && python3 --version
+
+CMD ["/bin/bash"]

@@ -1,0 +1,23 @@
+FROM oliviergob/dev-image
+
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir /var/run/sshd \
+    && ssh-keygen -A \
+    && sed -i \
+        -e 's/#PasswordAuthentication yes/PasswordAuthentication no/' \
+        -e 's/^PasswordAuthentication yes/PasswordAuthentication no/' \
+        /etc/ssh/sshd_config \
+    && printf '\nPubkeyAuthentication yes\nAuthorizedKeysFile .ssh/authorized_keys\nPermitRootLogin no\n' \
+        >> /etc/ssh/sshd_config \
+    && mkdir -p /home/devuser/.ssh /home/devuser/projects /home/devuser/.claude \
+    && chmod 700 /home/devuser/.ssh \
+    && chown -R devuser:devuser /home/devuser/.ssh /home/devuser/projects /home/devuser/.claude
+
+COPY --chown=devuser:devuser claude.md /home/devuser/.claude/CLAUDE.md
+
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D"]
