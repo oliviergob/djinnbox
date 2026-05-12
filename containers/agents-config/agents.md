@@ -1,6 +1,6 @@
 # Dev Container
 
-This is the `dev-ssh-persist` development container. The following ports are forwarded to the Windows host:
+This is the `djinnbox` development container. The following ports are forwarded to the Windows host:
 
 | Port | Use |
 |------|-----|

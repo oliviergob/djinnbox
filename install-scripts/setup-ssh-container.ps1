@@ -6,7 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ContainerName = "dev-ssh-persist"
+$ContainerName = "djinnbox"
 $TaskName      = "WSL-$ContainerName"
 
 function Write-Info($msg) { Write-Host "[INFO] $msg" }

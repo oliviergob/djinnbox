@@ -1,7 +1,7 @@
 #!/bin/bash
-# setup-ssh-container.sh — Idempotent setup for the dev-ssh-persist Podman container.
+# setup-ssh-container.sh — Idempotent setup for the djinnbox Podman container.
 # Runs as root inside WSL. Reads:
-#   /tmp/dev-ssh-persist/Dockerfile  — container image definition
+#   /tmp/djinnbox/Dockerfile  — container image definition
 #   /tmp/dev-ssh-pubkey.tmp          — SSH public key to authorize
 set -e
 
@@ -11,8 +11,6 @@ SSH_PORT=${3:-22022}
 
 [ -z "$USERNAME" ] && { echo "Error: USERNAME required"; exit 1; }
 
-CONTAINER="dev-ssh-persist"
-IMAGE="oliviergob/dev-ssh-persist"
 CONTAINER="djinnbox"
 IMAGE="oliviergob/djinnbox"
 SERVICE_NAME="container-${CONTAINER}.service"
@@ -85,7 +83,7 @@ loginctl enable-linger "$USERNAME" >/dev/null 2>&1 || true
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=dev-ssh-persist Podman container
+Description=djinnbox Podman container
 After=network.target
 
 [Service]
@@ -167,6 +165,48 @@ if [ -n "$WIN_HOME" ]; then
     fi
 else
     echo "[WARN] Could not resolve Windows home; skipping Claude desktop settings"
+fi
+
+# ── 7. Codex — remote_connections feature + SSH host entry ───────────────
+if [ -n "$WIN_HOME" ]; then
+    HOST_ALIAS="wsl-$CONTAINER"
+
+    # 7a. ~/.codex/config.toml — ensure [features] remote_connections = true
+    CODEX_DIR="$WIN_HOME/.codex"
+    CODEX_CONFIG="$CODEX_DIR/config.toml"
+    mkdir -p "$CODEX_DIR"
+    if [ ! -f "$CODEX_CONFIG" ]; then
+        printf '[features]\nremote_connections = true\n' > "$CODEX_CONFIG"
+        echo "[OK]   Created $CODEX_CONFIG with remote_connections = true"
+    elif ! grep -q '^\[features\]' "$CODEX_CONFIG"; then
+        printf '\n[features]\nremote_connections = true\n' >> "$CODEX_CONFIG"
+        echo "[OK]   Added [features] section to $CODEX_CONFIG"
+    elif ! grep -qE '^remote_connections[[:space:]]*=' "$CODEX_CONFIG"; then
+        sed -i '/^\[features\]/a\remote_connections = true' "$CODEX_CONFIG"
+        echo "[OK]   Added remote_connections = true to $CODEX_CONFIG"
+    else
+        sed -i 's/^remote_connections[[:space:]]*=.*/remote_connections = true/' "$CODEX_CONFIG"
+        echo "[OK]   remote_connections already set in $CODEX_CONFIG"
+    fi
+
+    # 7b. ~/.ssh/config — host entry for the container
+    SSH_CONFIG="$WIN_HOME/.ssh/config"
+    mkdir -p "$WIN_HOME/.ssh"
+    touch "$SSH_CONFIG"
+    if ! grep -qE "^Host[[:space:]]+${HOST_ALIAS}([[:space:]]|$)" "$SSH_CONFIG"; then
+        cat >> "$SSH_CONFIG" <<SSHEOF
+
+Host $HOST_ALIAS
+    HostName 127.0.0.1
+    Port $SSH_PORT
+    User devuser
+SSHEOF
+        echo "[OK]   SSH config entry added: Host $HOST_ALIAS in $SSH_CONFIG"
+    else
+        echo "[OK]   SSH config entry already exists: Host $HOST_ALIAS"
+    fi
+else
+    echo "[WARN] Could not resolve Windows home; skipping Codex configuration"
 fi
 
 rm -f /tmp/dev-ssh-pubkey.tmp /tmp/setup-ssh-container.sh

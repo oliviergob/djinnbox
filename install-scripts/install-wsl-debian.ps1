@@ -219,6 +219,6 @@ Write-Host ""
 if ($sshPubKey) {
     Write-Host "  $sshPubKey" -ForegroundColor White
 } else {
-    Write-Host "  (no key found — something may have gone wrong)" -ForegroundColor Red
+    Write-Host "  (no key found - something may have gone wrong)" -ForegroundColor Red
 }
 Write-Host ""
