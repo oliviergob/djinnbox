@@ -1,7 +1,6 @@
 #!/bin/bash
 # setup-ssh-container.sh — Idempotent setup for the djinnbox Podman container.
 # Runs as root inside WSL. Reads:
-#   /tmp/djinnbox/Dockerfile  — container image definition
 #   /tmp/dev-ssh-pubkey.tmp          — SSH public key to authorize
 set -e
 
@@ -12,7 +11,7 @@ SSH_PORT=${3:-22022}
 [ -z "$USERNAME" ] && { echo "Error: USERNAME required"; exit 1; }
 
 CONTAINER="djinnbox"
-IMAGE="oliviergob/djinnbox"
+IMAGE="docker.io/oliviergob/djinnbox"
 SERVICE_NAME="container-${CONTAINER}.service"
 USER_ID=$(id -u "$USERNAME")
 
@@ -24,21 +23,26 @@ run_as_user() {
         "$@"
 }
 
-# ── 1. Pull image ─────────────────────────────────────────────────────────
-if ! run_as_user podman image exists "$IMAGE" 2>/dev/null; then
-    echo "[INFO] Pulling $IMAGE..."
-    run_as_user podman pull "$IMAGE"
-    echo "[OK]   Image pulled"
+# ── 1. Update image from Docker Hub ───────────────────────────────────────
+OLD_IMAGE_ID=$(run_as_user podman image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)
+echo "[INFO] Pulling latest $IMAGE..."
+run_as_user podman pull "$IMAGE"
+NEW_IMAGE_ID=$(run_as_user podman image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)
+
+IMAGE_UPDATED=false
+if [ -n "$OLD_IMAGE_ID" ] && [ "$OLD_IMAGE_ID" != "$NEW_IMAGE_ID" ]; then
+    IMAGE_UPDATED=true
+    echo "[OK]   Image updated"
 else
-    echo "[OK]   Image already present: $IMAGE"
+    echo "[OK]   Image already up to date"
 fi
 
-# ── 2. Create container ────────────────────────────────────────────────────
+# ── 2. Create/recreate container ──────────────────────────────────────────
 MOUNT_SRC="/home/$USERNAME/$PROJECTS_PATH"
+mkdir -p "$MOUNT_SRC"
+chown "$USERNAME:$USERNAME" "$MOUNT_SRC"
 
-if ! run_as_user podman container exists "$CONTAINER" 2>/dev/null; then
-    mkdir -p "$MOUNT_SRC"
-    chown "$USERNAME:$USERNAME" "$MOUNT_SRC"
+_create_container() {
     run_as_user podman create \
         --name "$CONTAINER" \
         --userns=keep-id \
@@ -48,30 +52,32 @@ if ! run_as_user podman container exists "$CONTAINER" 2>/dev/null; then
         -p "127.0.0.1:8300:8300" \
         -v "${MOUNT_SRC}:/home/devuser/projects:z" \
         "$IMAGE"
-    echo "[OK]   Container created: $CONTAINER"
+}
+
+if run_as_user podman container exists "$CONTAINER" 2>/dev/null; then
+    if [ "$IMAGE_UPDATED" = "true" ]; then
+        echo "[INFO] Image updated — recreating container..."
+        run_as_user podman rm -f "$CONTAINER" 2>/dev/null || true
+        sleep 2
+        _create_container
+        echo "[OK]   Container recreated: $CONTAINER"
+    else
+        echo "[OK]   Container already up to date: $CONTAINER"
+    fi
 else
-    echo "[OK]   Container already exists: $CONTAINER"
+    _create_container
+    echo "[OK]   Container created: $CONTAINER"
 fi
 
 # ── 3. Install authorized_keys ─────────────────────────────────────────────
-WAS_RUNNING=$(run_as_user podman inspect "$CONTAINER" \
-    --format '{{.State.Running}}' 2>/dev/null || echo false)
-
-if [ "$WAS_RUNNING" != "true" ]; then
-    run_as_user podman start "$CONTAINER" >/dev/null
-    sleep 1
-fi
-
 if [ -f "/tmp/dev-ssh-pubkey.tmp" ]; then
-    run_as_user podman exec -i "$CONTAINER" bash -c \
-        "cat > /home/devuser/.ssh/authorized_keys \
-         && chmod 600 /home/devuser/.ssh/authorized_keys \
-         && chown devuser:devuser /home/devuser/.ssh/authorized_keys" \
-        < /tmp/dev-ssh-pubkey.tmp
+    echo "[INFO] Installing SSH keys via podman cp..."
+    # podman cp works on stopped containers and preserves ownership when using keep-id
+    run_as_user podman cp /tmp/dev-ssh-pubkey.tmp "$CONTAINER:/home/devuser/.ssh/authorized_keys"
+    run_as_user podman exec "$CONTAINER" chown devuser:devuser /home/devuser/.ssh/authorized_keys 2>/dev/null || true
+    run_as_user podman exec "$CONTAINER" chmod 600 /home/devuser/.ssh/authorized_keys 2>/dev/null || true
 fi
 echo "[OK]   authorized_keys installed"
-
-[ "$WAS_RUNNING" != "true" ] && run_as_user podman stop "$CONTAINER" >/dev/null
 
 # ── 4. Systemd user service ────────────────────────────────────────────────
 SERVICE_DIR="/home/$USERNAME/.config/systemd/user"
@@ -87,10 +93,13 @@ Description=djinnbox Podman container
 After=network.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/podman start $CONTAINER
+Type=simple
+ExecStartPre=-/usr/bin/podman stop $CONTAINER
+ExecStart=/usr/bin/podman start -a $CONTAINER
 ExecStop=/usr/bin/podman stop $CONTAINER
+Restart=always
+RestartSec=2
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=default.target
@@ -111,7 +120,8 @@ RUNNING=$(run_as_user podman inspect "$CONTAINER" \
 
 if [ "$RUNNING" != "true" ]; then
     run_as_user systemctl --user start "$SERVICE_NAME" 2>/dev/null \
-        || run_as_user podman start "$CONTAINER"
+        || run_as_user podman start "$CONTAINER" \
+        || { echo "[ERROR] Failed to start container"; exit 1; }
     echo "[OK]   Container started"
 else
     echo "[OK]   Container already running"
@@ -151,18 +161,23 @@ if [ -n "$WIN_HOME" ]; then
 
     echo "[OK]   Claude desktop settings updated: $CLAUDE_SETTINGS"
 
-    if HOST_PUBKEY=$(run_as_user podman exec "$CONTAINER" cat /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk '{print $1, $2}'); then
+    TMPKEY=$(run_as_user mktemp)
+    if run_as_user podman cp "$CONTAINER:/etc/ssh/ssh_host_ed25519_key.pub" "$TMPKEY" 2>/dev/null \
+       && HOST_PUBKEY=$(awk '{print $1, $2}' "$TMPKEY") && [ -n "$HOST_PUBKEY" ]; then
         KH_FILE="$WIN_HOME/.ssh/known_hosts"
         mkdir -p "$WIN_HOME/.ssh"
         touch "$KH_FILE"
         for ADDR in "127.0.0.1" "localhost"; do
-            ssh-keygen -f "$KH_FILE" -R "[${ADDR}]:${SSH_PORT}" 2>/dev/null
-            echo "[${ADDR}]:${SSH_PORT} ${HOST_PUBKEY}" >> "$KH_FILE"
+            ssh-keygen -f "$KH_FILE" -R "[${ADDR}]:${SSH_PORT}" 2>/dev/null || true
         done
-        echo "[OK]   Host key written to known_hosts: [127.0.0.1]:${SSH_PORT}"
+        printf '%s\n' \
+            "[127.0.0.1]:${SSH_PORT} ${HOST_PUBKEY}" \
+            "[localhost]:${SSH_PORT} ${HOST_PUBKEY}" >> "$KH_FILE"
+        echo "[OK]   Host key written to known_hosts: [127.0.0.1]:${SSH_PORT} and [localhost]:${SSH_PORT}"
     else
         echo "[WARN] Could not read container host key; known_hosts not updated"
     fi
+    rm -f "$TMPKEY"
 else
     echo "[WARN] Could not resolve Windows home; skipping Claude desktop settings"
 fi
@@ -200,6 +215,8 @@ Host $HOST_ALIAS
     HostName 127.0.0.1
     Port $SSH_PORT
     User devuser
+    ServerAliveInterval 20
+    ServerAliveCountMax 3
 SSHEOF
         echo "[OK]   SSH config entry added: Host $HOST_ALIAS in $SSH_CONFIG"
     else

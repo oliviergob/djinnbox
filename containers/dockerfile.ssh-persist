@@ -4,23 +4,25 @@ USER root
 
 RUN npm install -g @openai/codex
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server tini \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir /var/run/sshd \
     && ssh-keygen -A \
+    && passwd -d devuser \
     && sed -i \
         -e 's/#PasswordAuthentication yes/PasswordAuthentication no/' \
         -e 's/^PasswordAuthentication yes/PasswordAuthentication no/' \
         /etc/ssh/sshd_config \
-    && printf '\nPubkeyAuthentication yes\nAuthorizedKeysFile .ssh/authorized_keys\nPermitRootLogin no\n' \
+    && printf '\nPubkeyAuthentication yes\nAuthorizedKeysFile .ssh/authorized_keys\nPermitRootLogin no\nUsePAM no\nTCPKeepAlive yes\nClientAliveInterval 60\nClientAliveCountMax 3\nUseDNS no\nIPQoS throughput\n' \
         >> /etc/ssh/sshd_config \
     && mkdir -p /home/devuser/.ssh /home/devuser/projects /home/devuser/.claude /home/devuser/.codex \
     && chmod 700 /home/devuser/.ssh \
     && chown -R devuser:devuser /home/devuser/.ssh /home/devuser/projects /home/devuser/.claude /home/devuser/.codex
 
-COPY --chown=devuser:devuser ./agents-config/claude.md /home/devuser/.claude/CLAUDE.md
-COPY --chown=devuser:devuser ./agents-config/agents.md /home/devuser/.codex/AGENTS.md
+COPY --chown=devuser:devuser agents-config/claude.md /home/devuser/.claude/CLAUDE.md
+COPY --chown=devuser:devuser agents-config/agents.md /home/devuser/.codex/AGENTS.md
 
 EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sh", "-c", "mkdir -p /run/sshd && exec /usr/sbin/sshd -De"]
