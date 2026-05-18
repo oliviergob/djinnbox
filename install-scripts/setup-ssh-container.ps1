@@ -37,21 +37,37 @@ wsl -d $Distro -u root -- /tmp/setup-ssh-container.sh $Username $ProjectsPath $S
 Write-Ok "Linux setup complete"
 
 # ── 4. Task Scheduler — start WSL at logon so systemd starts the container ─
-if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
-    $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $action    = New-ScheduledTaskAction -Execute "wsl.exe" -Argument "-d `"$Distro`" -- true"
-    $settings  = New-ScheduledTaskSettingsSet `
-                     -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
-                     -StartWhenAvailable
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
-    Register-ScheduledTask -TaskName $TaskName -Trigger $trigger -Action $action `
-        -Settings $settings -Principal $principal `
-        -Description "Starts WSL $Distro at logon; systemd linger then starts $ContainerName automatically" `
-        | Out-Null
-    Write-Ok "Task Scheduler task registered: $TaskName"
-} else {
-    Write-Ok "Task Scheduler task already exists: $TaskName"
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
+
+# Generate a VBS launcher — wscript.exe starts PowerShell with SW_HIDE (windowStyle=0)
+# so no console window ever appears. PowerShell holds the WSL session open via sleep infinity.
+$launcherDir  = "$env:LOCALAPPDATA\djinnbox"
+$launcherPath = "$launcherDir\wsl-start.vbs"
+$null         = New-Item -ItemType Directory -Force $launcherDir
+@"
+CreateObject("WScript.Shell").Run "powershell.exe -NonInteractive -ExecutionPolicy Bypass -Command ""wsl.exe -d '$Distro' -u root -- bash -c 'systemctl is-system-running --wait && exec sleep infinity'""", 0, False
+"@ | Set-Content $launcherPath -Encoding ASCII
+Write-Ok "Launcher written: $launcherPath"
+
+$trigger        = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$trigger.Delay  = "PT15S"
+$action         = New-ScheduledTaskAction -Execute "wscript.exe" `
+                      -Argument "//B //NoLogo `"$launcherPath`""
+$settings       = New-ScheduledTaskSettingsSet `
+                      -ExecutionTimeLimit (New-TimeSpan -Minutes 1) `
+                      -StartWhenAvailable `
+                      -RestartCount 3 `
+                      -RestartInterval (New-TimeSpan -Minutes 1)
+$principal      = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+
+Register-ScheduledTask -TaskName $TaskName -Trigger $trigger -Action $action `
+    -Settings $settings -Principal $principal `
+    -Description "Starts WSL $Distro silently at logon; PowerShell holds the session open" `
+    | Out-Null
+Write-Ok "Task Scheduler task registered: $TaskName"
+
 
 # ── 5. Summary ────────────────────────────────────────────────────────────
 Write-Host ""

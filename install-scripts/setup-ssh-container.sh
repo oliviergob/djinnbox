@@ -86,6 +86,11 @@ mkdir -p "$SERVICE_DIR"
 chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
 
 loginctl enable-linger "$USERNAME" >/dev/null 2>&1 || true
+if [ -f "/var/lib/systemd/linger/$USERNAME" ]; then
+    echo "[OK]   Linger enabled for $USERNAME"
+else
+    echo "[WARN] Linger not enabled for $USERNAME — container may not autostart"
+fi
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]

@@ -52,6 +52,11 @@ if ! command -v podman >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 \
     apt-get install -y podman slirp4netns fuse-overlayfs inotify-tools jq curl ca-certificates git openssh-client
 fi
 
+# 4b. Enable persistent logging (essential for debugging WSL shutdowns)
+mkdir -p /var/log/journal
+systemd-tmpfiles --create --prefix /var/log/journal
+systemctl restart systemd-journald 2>/dev/null || true
+
 # 4a. Ownership watcher — chown files to $USERNAME the moment Windows drops them in projects
 WATCHER_SCRIPT="/usr/local/bin/projects-owner-fix.sh"
 cat > "$WATCHER_SCRIPT" << 'SCRIPT'

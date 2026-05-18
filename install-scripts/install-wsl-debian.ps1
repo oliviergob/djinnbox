@@ -21,22 +21,38 @@ function Write-Ok($msg) {
 }
 
 # -----------------------------
-# Configure .wslconfig (mirrored networking for localhost relay)
+# Configure .wslconfig (mirrored networking)
 # -----------------------------
 $wslConfigPath = "$env:USERPROFILE\.wslconfig"
 if (-not (Test-Path $wslConfigPath)) { New-Item $wslConfigPath -ItemType File | Out-Null }
-$wslConfigContent = Get-Content $wslConfigPath -Raw
+[string]$wslConfigContent = Get-Content $wslConfigPath -Raw
+$wslConfigChanged = $false
+
+function Set-WslConfigValue([string]$content, [string]$section, [string]$key, [string]$value) {
+    if ($content -match "(?m)^$key\s*=") {
+        return $content -replace "(?m)^$key\s*=.*", "$key=$value"
+    } elseif ($content -match "\[$section\]") {
+        return $content -replace "(\[$section\])", "`$1`n$key=$value"
+    } else {
+        return $content + "`n[$section]`n$key=$value`n"
+    }
+}
 
 if ($wslConfigContent -notmatch "networkingMode\s*=\s*mirrored") {
-    if ($wslConfigContent -match "\[wsl2\]") {
-        $wslConfigContent = $wslConfigContent -replace "(\[wsl2\])", "`$1`nnetworkingMode=mirrored"
-    } else {
-        $wslConfigContent += "`n[wsl2]`nnetworkingMode=mirrored`n"
-    }
+    $wslConfigContent = Set-WslConfigValue $wslConfigContent "wsl2" "networkingMode" "mirrored"
+    $wslConfigChanged = $true
+}
+if ($wslConfigContent -match "(?m)^vmIdlingTimeout\s*=") {
+    $wslConfigContent = $wslConfigContent -replace "(?m)^vmIdlingTimeout\s*=.*\r?\n?", ""
+    $wslConfigChanged = $true
+    Write-Warn "Removed unsupported vmIdlingTimeout from .wslconfig (not valid in WSL 2.5+)"
+}
+if ($wslConfigChanged) {
     Set-Content $wslConfigPath $wslConfigContent -NoNewline
-    Write-Ok "Enabled mirrored networking in .wslconfig"
+    wsl --shutdown 2>$null
+    Write-Ok "Updated .wslconfig and restarted WSL to apply settings"
 } else {
-    Write-Ok "Mirrored networking already configured"
+    Write-Ok "WSL config already up to date"
 }
 
 # -----------------------------
@@ -79,7 +95,7 @@ Write-Info "Transferring setup script..."
 Get-Content $setupScript -Raw | wsl -d $Distro -u root -- bash -c "tr -d '\r' > $remotePath && chmod +x $remotePath"
 
 Write-Info "Executing setup script inside $Distro..."
-wsl -d $Distro -u root -- $remotePath $Username $ProjectsPath $settingsWSL $env:USERNAME
+wsl -d $Distro -u root -- $remotePath "$Username" "$ProjectsPath" "$settingsWSL" "$env:USERNAME"
 
 if ($LASTEXITCODE -eq 2) {
     Write-Warn "WSL configuration updated. Terminating $Distro to apply changes..."
@@ -90,7 +106,7 @@ if ($LASTEXITCODE -eq 2) {
     # Re-transfer script as /tmp is cleared on restart
     Get-Content $setupScript -Raw | wsl -d $Distro -u root -- bash -c "tr -d '\r' > $remotePath && chmod +x $remotePath"
 
-    wsl -d $Distro -u root -- $remotePath $Username $ProjectsPath $settingsWSL $env:USERNAME
+    wsl -d $Distro -u root -- $remotePath "$Username" "$ProjectsPath" "$settingsWSL" "$env:USERNAME"
 }
 Write-Ok "Linux configuration complete"
 
@@ -222,3 +238,12 @@ if ($sshPubKey) {
     Write-Host "  (no key found - something may have gone wrong)" -ForegroundColor Red
 }
 Write-Host ""
+
+# All WSL commands are done — terminate then boot WSL fresh so the keep-alive latches.
+# Start-ScheduledTask routes through the Task Scheduler service (Session 0) and loses
+# the interactive user token WSL requires. Start-Process runs in this session directly.
+if (-not $SkipSshContainer) {
+    wsl --terminate $Distro
+    Start-Process "wsl.exe" -ArgumentList "-d", $Distro, "-u", "root", "--", "bash", "-c", "systemctl is-system-running --wait && exec sleep infinity" -WindowStyle Hidden
+    Write-Ok "WSL keep-alive started"
+}
