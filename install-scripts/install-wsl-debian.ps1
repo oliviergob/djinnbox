@@ -239,6 +239,19 @@ if ($sshPubKey) {
 }
 Write-Host ""
 
+# Write summary files for the installer's finish page
+$infoLines = @("WSL distro:  $Distro", "User:        $Username", "Projects:    \\wsl.localhost\$Distro\home\$Username\$ProjectsPath")
+if (-not $SkipSshContainer) {
+    $infoLines += "Web ports:   8100, 8200, 8300  ->  localhost:8100 / 8200 / 8300"
+}
+$infoLines -join "`r`n" | Out-File -FilePath (Join-Path $PSScriptRoot "summary-info.txt") -Encoding UTF8 -NoNewline
+
+$sshCmdText = if (-not $SkipSshContainer) { "ssh -p $SshPort devuser@localhost" } else { "" }
+$sshCmdText | Out-File -FilePath (Join-Path $PSScriptRoot "summary-ssh-cmd.txt") -Encoding UTF8 -NoNewline
+
+$sshKeyText = if ($sshPubKey) { $sshPubKey } else { "" }
+$sshKeyText | Out-File -FilePath (Join-Path $PSScriptRoot "summary-ssh-key.txt") -Encoding UTF8 -NoNewline
+
 # All WSL commands are done — terminate then boot WSL fresh so the keep-alive latches.
 # Start-ScheduledTask routes through the Task Scheduler service (Session 0) and loses
 # the interactive user token WSL requires. Start-Process runs in this session directly.
