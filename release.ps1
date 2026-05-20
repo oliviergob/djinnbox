@@ -7,7 +7,7 @@ $tag = "v$version"
 $exe = Join-Path $PSScriptRoot "Output\djinnbox-setup.exe"
 
 if (-not (Test-Path $exe)) {
-    Write-Error "Output\djinnbox-setup.exe not found — compile djinnbox-setup.iss with Inno Setup first"
+    Write-Error "Output\djinnbox-setup.exe not found. Compile djinnbox-setup.iss with Inno Setup first."
     exit 1
 }
 
